@@ -651,7 +651,7 @@
         };
         let savedProduct;
         if (id) {
-          const { data,error } = await db.from('products').update(payload).eq('id',id).select('*').single(); if (error) throw error; savedProduct = data;
+          const { data,error } = await db.from('products').update(payload).eq('id',id).eq('store_id',activeStoreId).select('*').single(); if (error) throw error; savedProduct = data;
         } else {
           const { data,error } = await db.from('products').insert(payload).select('*').single(); if (error) throw error; savedProduct = data;
         }
@@ -676,7 +676,7 @@
       await adminRequest(async () => {
         if (button.dataset.productAction === 'edit') { showProductForm(product); return; }
         if (button.dataset.productAction === 'toggle') {
-          const { error,data } = await db.from('products').update({active:!product.active,updated_at:new Date().toISOString()}).eq('id',product.id).select('id,active').single(); if (error) throw error; if (!data) throw new Error('A base de dados não confirmou a alteração.');
+          const { error,data } = await db.from('products').update({active:!product.active,updated_at:new Date().toISOString()}).eq('id',product.id).eq('store_id',activeStoreId).select('id,active').single(); if (error) throw error; if (!data) throw new Error('A base de dados não confirmou a alteração.');
           showToast(t('productToggled'),'success'); await Promise.all([loadAdminProducts(),loadPublicData()]); return;
         }
         if (button.dataset.productAction === 'delete') {
@@ -684,7 +684,7 @@
           const { error:e1 } = await db.from('product_variants').delete().eq('product_id',product.id); if (e1) throw e1;
           const { error:e2 } = await db.from('product_images').delete().eq('product_id',product.id); if (e2) throw e2;
           const { error:e3 } = await db.from('order_items').update({product_id:null}).eq('product_id',product.id); if (e3) throw e3;
-          const { data,error:e4 } = await db.from('products').delete().eq('id',product.id).select('id').maybeSingle(); if (e4) throw e4; if (!data) throw new Error('A base de dados não confirmou a eliminação.');
+          const { data,error:e4 } = await db.from('products').delete().eq('id',product.id).eq('store_id',activeStoreId).select('id').maybeSingle(); if (e4) throw e4; if (!data) throw new Error('A base de dados não confirmou a eliminação.');
           showToast(t('productDeleted'),'success'); await Promise.all([loadAdminProducts(),loadPublicData(),loadAdminDashboard()]);
         }
       });
@@ -718,12 +718,12 @@
       await adminRequest(async () => {
         const action = button.dataset.categoryAction;
         if (action === 'edit') { $('#category-form').elements.id.value = cat.id; $('#category-form').elements.name.value = cat.name; $('#cancel-category-edit').hidden = false; $('#category-form').scrollIntoView({behavior:'smooth'}); return; }
-        if (action === 'toggle') { const {error,data} = await db.from('categories').update({active:!cat.active,updated_at:new Date().toISOString()}).eq('id',cat.id).select('id,active').single(); if (error) throw error; if (!data) throw new Error('A base de dados não confirmou a alteração.'); await Promise.all([loadAdminCategories(),loadPublicData(),loadAdminProducts()]); showToast(t('categorySaved'),'success'); return; }
+        if (action === 'toggle') { const {error,data} = await db.from('categories').update({active:!cat.active,updated_at:new Date().toISOString()}).eq('id',cat.id).eq('store_id',activeStoreId).select('id,active').single(); if (error) throw error; if (!data) throw new Error('A base de dados não confirmou a alteração.'); await Promise.all([loadAdminCategories(),loadPublicData(),loadAdminProducts()]); showToast(t('categorySaved'),'success'); return; }
         if (action === 'delete') {
           if (!window.confirm(`${t('deleteConfirm')}\n${cat.name}`)) return;
-          const {data:used,error:checkError} = await db.from('products').select('id').eq('category_id',cat.id).limit(1); if (checkError) throw checkError;
-          if ((used || []).length) { const {error,data} = await db.from('categories').update({active:false,updated_at:new Date().toISOString()}).eq('id',cat.id).select('id').single(); if (error) throw error; if (!data) throw new Error('A categoria não foi atualizada.'); showToast(t('categoryInUse'),'success',6000); }
-          else { const {data,error} = await db.from('categories').delete().eq('id',cat.id).select('id').maybeSingle(); if (error) throw error; if (!data) throw new Error('A base de dados não confirmou a eliminação.'); showToast(t('categoryDeleted'),'success'); }
+          const {data:used,error:checkError} = await db.from('products').select('id').eq('store_id',activeStoreId).eq('category_id',cat.id).limit(1); if (checkError) throw checkError;
+          if ((used || []).length) { const {error,data} = await db.from('categories').update({active:false,updated_at:new Date().toISOString()}).eq('id',cat.id).eq('store_id',activeStoreId).select('id').single(); if (error) throw error; if (!data) throw new Error('A categoria não foi atualizada.'); showToast(t('categoryInUse'),'success',6000); }
+          else { const {data,error} = await db.from('categories').delete().eq('id',cat.id).eq('store_id',activeStoreId).select('id').maybeSingle(); if (error) throw error; if (!data) throw new Error('A base de dados não confirmou a eliminação.'); showToast(t('categoryDeleted'),'success'); }
           await Promise.all([loadAdminCategories(),loadPublicData(),loadAdminProducts()]);
         }
       });
@@ -800,7 +800,7 @@
     try {
       await adminRequest(async () => {
         setBusy(button,true,t('saving'));
-        const {data,error} = await db.from('orders').update({status,updated_at:new Date().toISOString()}).eq('id',id).select('id,status').single(); if (error) throw error; if (!data) throw new Error('A base de dados não confirmou o estado.');
+        const {data,error} = await db.from('orders').update({status,updated_at:new Date().toISOString()}).eq('id',id).eq('store_id',activeStoreId).select('id,status').single(); if (error) throw error; if (!data) throw new Error('A base de dados não confirmou o estado.');
         showToast(t('orderStatusSaved'),'success'); await Promise.all([loadAdminOrders(),loadAdminDashboard()]);
       });
     } catch(error) { console.error(error); showToast(error.message || t('connectionError'),'error',6000); }
