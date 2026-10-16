@@ -125,6 +125,9 @@
     $('#close-success')?.addEventListener('click', () => closeOverlay('checkout-overlay'));
     $('#open-admin')?.addEventListener('click', openAdminArea);
     $('#admin-login-form')?.addEventListener('submit', submitLogin);
+    $('#open-customer-signup')?.addEventListener('click', () => showSignupView(true));
+    $('#back-to-login')?.addEventListener('click', () => showSignupView(false));
+    $('#customer-signup-form')?.addEventListener('submit', submitCustomerSignup);
     $('#forgot-password')?.addEventListener('click', recoverPassword);
     $('#password-recovery-form')?.addEventListener('submit', submitPasswordRecovery);
     db.auth.onAuthStateChange((event, session) => {
@@ -334,6 +337,64 @@
       setMessage($('#login-message'),message,true);
     } finally { setBusy(button,false); }
   }
+
+  function showSignupView(show) {
+    const signup = $('#customer-signup-view');
+    if (!signup) return;
+    $('#admin-login-view').hidden = !!show;
+    signup.hidden = !show;
+    $('#password-recovery-view').hidden = true;
+    $('#admin-dashboard').hidden = true;
+    $('#admin-logout').hidden = true;
+    setMessage($('#signup-message'),'');
+  }
+
+  async function submitCustomerSignup(event) {
+    event.preventDefault();
+    if (!db) return;
+    const form = event.currentTarget;
+    const data = new FormData(form);
+    const email = String(data.get('email') || '').trim().toLowerCase();
+    const password = String(data.get('password') || '');
+    const confirmation = String(data.get('confirm_password') || '');
+    const message = $('#signup-message');
+    const button = $('button[type="submit"]', form);
+    setMessage(message, '');
+    if (password.length < 8 || password !== confirmation) {
+      setMessage(message, 'As palavras-passe devem coincidir e ter pelo menos 8 caracteres.', true);
+      return;
+    }
+    setBusy(button, true, 'A criar conta…');
+    try {
+      const { data: result, error } = await db.auth.signUp({
+        email,
+        password,
+        options: {
+          emailRedirectTo: 'https://vani-elegance.onrender.com/',
+          data: {
+            full_name: String(data.get('full_name') || '').trim(),
+            phone: String(data.get('phone') || '').trim()
+          }
+        }
+      });
+      if (error) throw error;
+      form.reset();
+      showSignupView(false);
+      const loginEmail = $('#admin-login-form input[name="email"]');
+      if (loginEmail) loginEmail.value = email;
+      const notice = result?.session
+        ? 'Conta de cliente criada. Este registo não concede acesso administrativo.'
+        : 'Registo enviado. Verifique o email para confirmar a conta. O acesso administrativo continua protegido.';
+      setMessage($('#login-message'), notice);
+      showToast(notice, 'success', 7000);
+    } catch (error) {
+      console.error('Customer signup:', error);
+      setMessage(message, error?.message || 'Não foi possível criar a conta. Verifique os dados e tente novamente.', true);
+    } finally {
+      setBusy(button, false);
+    }
+  }
+
   async function recoverPassword() {
     if (!db) return;
     const email = window.prompt(t('confirmEmailReset'));
