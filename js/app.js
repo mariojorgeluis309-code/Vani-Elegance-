@@ -32,6 +32,8 @@
   let db = null;
   let language = localStorage.getItem(LANGUAGE_KEY) || 'pt';
   let storeSettings = { id: null, store_name: 'Vani Elegance', whatsapp_number: null, phone: null, email: null, address: null, logo_url: null, currency: 'MZN', currency_label: 'MT', default_language: 'pt' };
+  let activeStoreId = null;
+  let activeStoreSlug = new URLSearchParams(location.search).get('loja') || localStorage.getItem('vani_active_store_slug') || 'vani-elegance';
   let products = [];
   let categories = [];
   let paymentSettings = [];
@@ -100,6 +102,7 @@
     $('#language-select').value = language;
     applyTranslations();
     bindEvents();
+    await resolveActiveStore();
     await loadPublicData();
     const { data: sessionData } = await db.auth.getSession();
     if (sessionData?.session) currentAdmin = sessionData.session.user;
@@ -129,6 +132,8 @@
     $('#open-customer-signup-public')?.addEventListener('click', async () => { await openAdminArea(); showSignupView(true); });
     $('#back-to-login')?.addEventListener('click', () => showSignupView(false));
     $('#customer-signup-form')?.addEventListener('submit', submitCustomerSignup);
+    $('#store-create-form')?.addEventListener('submit', createStoreFromForm);
+    $('#store-invitation-form')?.addEventListener('submit', submitCreateInvitation);
     $('#forgot-password')?.addEventListener('click', recoverPassword);
     $('#password-recovery-form')?.addEventListener('submit', submitPasswordRecovery);
     db.auth.onAuthStateChange((event, session) => {
@@ -152,15 +157,72 @@
     $('#password-form')?.addEventListener('submit', updatePassword);
   }
 
+  async function resolveActiveStore() {
+    if (!db) return;
+    const requested = new URLSearchParams(location.search).get('loja') || localStorage.getItem('vani_active_store_slug') || 'vani-elegance';
+    const { data, error } = await db.from('stores').select('id,name,slug,status').eq('slug',requested).eq('status','active').maybeSingle();
+    if (error) console.error('resolve store:',error);
+    if (data) setActiveStore(data);
+    else if (requested !== 'vani-elegance') {
+      const fallback = await db.from('stores').select('id,name,slug,status').eq('slug','vani-elegance').eq('status','active').maybeSingle();
+      if (fallback.data) setActiveStore(fallback.data);
+    }
+  }
+  function setActiveStore(store) {
+    if (!store?.id || !store?.slug) throw new Error('Não foi possível identificar a loja.');
+    activeStoreId = store.id; activeStoreSlug = store.slug;
+    localStorage.setItem('vani_active_store_slug',store.slug);
+    const url = new URL(location.href);
+    if (store.slug === 'vani-elegance') url.searchParams.delete('loja'); else url.searchParams.set('loja',store.slug);
+    history.replaceState({},'',url);
+  }
+  async function findUserStore(userId) {
+    const {data,error}=await db.from('store_memberships').select('store_id,role,stores(id,name,slug,status)').eq('user_id',userId).order('created_at',{ascending:true});
+    if(error) throw error;
+    const stores=(data||[]).map(m=>m.stores).filter(s=>s&&s.status==='active');
+    const chosen=stores.find(s=>s.id===activeStoreId)||stores[0];
+    if(!chosen) return false;
+    setActiveStore(chosen); await loadPublicData(); return true;
+  }
+  function showStoreCreateView(user) {
+    $('#admin-login-view').hidden=true; $('#customer-signup-view').hidden=true;
+    $('#password-recovery-view').hidden=true; $('#admin-dashboard').hidden=true;
+    $('#store-create-view').hidden=false; $('#admin-logout').hidden=false;
+    const form=$('#store-create-form');
+    if(form&&user){const m=user.user_metadata||{};
+      if(!form.elements.store_name.value)form.elements.store_name.value=m.store_name||'';
+      if(!form.elements.logo_url.value)form.elements.logo_url.value=m.logo_url||'';
+      if(!form.elements.phone.value)form.elements.phone.value=m.phone||'';
+      if(!form.elements.email.value)form.elements.email.value=user.email||'';
+      if(!form.elements.invite_code.value)form.elements.invite_code.value=m.invite_code||'';
+    }
+  }
+  async function createStoreFromForm(event) {
+    event.preventDefault(); const form=event.currentTarget; const d=new FormData(form); const button=$('button[type="submit"]',form);
+    setMessage($('#store-create-message'),''); setBusy(button,true,'A criar loja…');
+    try {
+      const {data,error}=await db.rpc('create_store_from_invitation',{
+        p_name:String(d.get('store_name')||'').trim(),p_logo_url:String(d.get('logo_url')||'').trim()||null,
+        p_phone:String(d.get('phone')||'').trim()||null,p_email:String(d.get('email')||'').trim()||null,
+        p_invite_code:String(d.get('invite_code')||'').trim().toUpperCase()
+      });
+      if(error)throw error; const store=Array.isArray(data)?data[0]:data;
+      if(!store?.id||!store?.slug)throw new Error('A base de dados não confirmou a criação da loja.');
+      setActiveStore(store); await loadPublicData(); form.reset(); showAdminDashboard();
+      showToast('Loja criada com sucesso. Já pode cadastrar os seus produtos.','success',7000);
+    } catch(error){console.error('create store:',error);setMessage($('#store-create-message'),error.message||'Não foi possível criar a loja. Confirme o convite.',true);}
+    finally{setBusy(button,false);}
+  }
+
   async function loadPublicData() {
     if (!db) return;
     $('#products-grid').innerHTML = `<div class="loading-card"><span class="spinner"></span><p>${escapeHTML(t('loading'))}</p></div>`;
     catalogLoadError = false;
     const results = await Promise.allSettled([
-      db.from('store_settings').select('*').limit(1).maybeSingle(),
-      db.from('categories').select('*').eq('active', true).order('sort_order').order('name'),
-      db.from('products').select('*, categories(id,name,slug,active), product_variants(*)').eq('active', true).order('featured', { ascending: false }).order('created_at', { ascending: false }),
-      db.from('payment_settings').select('*').eq('active', true).order('sort_order').order('method_name')
+      db.from('store_settings').select('*').eq('store_id', activeStoreId).limit(1).maybeSingle(),
+      db.from('categories').select('*').eq('store_id', activeStoreId).eq('active', true).order('sort_order').order('name'),
+      db.from('products').select('*, categories(id,name,slug,active), product_variants(*)').eq('store_id', activeStoreId).eq('active', true).order('featured', { ascending: false }).order('created_at', { ascending: false }),
+      db.from('payment_settings').select('*').eq('store_id', activeStoreId).eq('active', true).order('sort_order').order('method_name')
     ]);
     const [settingsResult, categoriesResult, productsResult, paymentsResult] = results.map(r => r.status === 'fulfilled' ? r.value : { error: r.reason });
     if (settingsResult.error) console.error('store_settings:', settingsResult.error); else if (settingsResult.data) storeSettings = { ...storeSettings, ...settingsResult.data };
@@ -278,7 +340,7 @@
     const data = new FormData(form); const paymentReference = String(data.get('payment_reference') || '').trim();
     if (paymentReference.length > 120) { showToast(t('rpcReferenceTooLong'),'error'); return; }
     const items = cart.map(item => ({ product_id:item.productId, ...(item.variantId ? { variant_id:item.variantId } : {}), qty:item.quantity }));
-    const payload = { customer_name:String(data.get('customer_name') || '').trim(), customer_phone:String(data.get('customer_phone') || '').trim(), delivery_address:String(data.get('delivery_address') || '').trim(), payment_method:String(data.get('payment_method') || ''), payment_reference:paymentReference || null, items };
+    const payload = { store_id:activeStoreId, customer_name:String(data.get('customer_name') || '').trim(), customer_phone:String(data.get('customer_phone') || '').trim(), delivery_address:String(data.get('delivery_address') || '').trim(), payment_method:String(data.get('payment_method') || ''), payment_reference:paymentReference || null, items };
     if (!payload.customer_name || !payload.customer_phone || !payload.delivery_address || !payload.payment_method) { showToast(t('requiredFields'),'error'); return; }
     const button = $('#place-order-button'); setBusy(button,true,t('saving'));
     try {
@@ -313,15 +375,20 @@
       currentAdmin = data.session.user;
       const allowed = await checkAdminRole(currentAdmin.id);
       if (allowed) { showAdminDashboard(); return; }
-      await db.auth.signOut(); currentAdmin = null;
+      if (await findUserStore(currentAdmin.id)) { showAdminDashboard(); return; }
+      showStoreCreateView(currentAdmin); return;
     }
-    $('#admin-login-view').hidden = false; $('#admin-dashboard').hidden = true; $('#admin-logout').hidden = true;
+    $('#admin-login-view').hidden = false; $('#customer-signup-view').hidden = true; $('#password-recovery-view').hidden = true; $('#store-create-view').hidden = true; $('#admin-dashboard').hidden = true; $('#admin-logout').hidden = true;
   }
   async function checkAdminRole(userId) {
-    if (!userId) return false;
-    const { data, error } = await db.from('profiles').select('id,role,full_name').eq('id',userId).maybeSingle();
-    if (error) { console.error('profiles role:',error); return false; }
-    return data?.role === 'admin';
+    if (!userId || !activeStoreId) return false;
+    const {data,error}=await db.from('store_memberships').select('store_id,role').eq('user_id',userId).eq('store_id',activeStoreId).maybeSingle();
+    if(error){console.error('store membership:',error);return false;}
+    return !!data && ['owner','manager','editor'].includes(data.role);
+  }
+  async function checkPlatformAdmin(userId) {
+    if(!userId)return false; const {data,error}=await db.from('profiles').select('id,role').eq('id',userId).maybeSingle();
+    if(error){console.error('platform role:',error);return false;} return data?.role==='admin';
   }
   async function submitLogin(event) {
     event.preventDefault(); if (!db) return;
@@ -330,11 +397,14 @@
       const { data: authData, error } = await db.auth.signInWithPassword({ email:String(data.get('email')).trim(), password:String(data.get('password')) });
       if (error) throw error;
       const user = authData?.user || authData?.session?.user;
-      if (!user || !(await checkAdminRole(user.id))) { await db.auth.signOut(); throw new Error('NOT_ADMIN'); }
-      currentAdmin = user; form.reset(); showAdminDashboard();
+      if (!user) throw new Error('O Supabase não devolveu uma sessão válida.');
+      currentAdmin = user;
+      if (await checkAdminRole(user.id)) { form.reset(); showAdminDashboard(); }
+      else if (await findUserStore(user.id)) { form.reset(); showAdminDashboard(); }
+      else { showStoreCreateView(user); }
     } catch (error) {
       console.error('Admin login:',error);
-      const message = String(error?.message || '').includes('NOT_ADMIN') ? t('notAdmin') : `${t('loginFailed')} ${error?.message || ''}`;
+      const message = `${t('loginFailed')} ${error?.message || ''}`;
       setMessage($('#login-message'),message,true);
     } finally { setBusy(button,false); }
   }
@@ -343,6 +413,7 @@
     const signup = $('#customer-signup-view');
     if (!signup) return;
     $('#admin-login-view').hidden = !!show;
+    $('#store-create-view').hidden = true;
     signup.hidden = !show;
     $('#password-recovery-view').hidden = true;
     $('#admin-dashboard').hidden = true;
@@ -351,49 +422,44 @@
   }
 
   async function submitCustomerSignup(event) {
-    event.preventDefault();
-    if (!db) return;
-    const form = event.currentTarget;
-    const data = new FormData(form);
-    const email = String(data.get('email') || '').trim().toLowerCase();
-    const password = String(data.get('password') || '');
-    const confirmation = String(data.get('confirm_password') || '');
-    const message = $('#signup-message');
-    const button = $('button[type="submit"]', form);
-    setMessage(message, '');
-    if (password.length < 8 || password !== confirmation) {
-      setMessage(message, 'As palavras-passe devem coincidir e ter pelo menos 8 caracteres.', true);
-      return;
-    }
-    setBusy(button, true, 'A criar conta…');
-    try {
-      const { data: result, error } = await db.auth.signUp({
-        email,
-        password,
-        options: {
-          emailRedirectTo: 'https://vani-elegance.onrender.com/',
-          data: {
-            full_name: String(data.get('full_name') || '').trim(),
-            phone: String(data.get('phone') || '').trim()
-          }
-        }
-      });
-      if (error) throw error;
+    event.preventDefault(); if(!db)return;
+    const form=event.currentTarget, d=new FormData(form);
+    const email=String(d.get('email')||'').trim().toLowerCase();
+    const password=String(d.get('password')||''), confirmation=String(d.get('confirm_password')||'');
+    const inviteCode=String(d.get('invite_code')||'').trim().toUpperCase();
+    const storeName=String(d.get('store_name')||'').trim();
+    const msg=$('#signup-message'), button=$('button[type="submit"]',form); setMessage(msg,'');
+    if(!storeName||!inviteCode||password.length<8||password!==confirmation){setMessage(msg,'Preencha o nome da loja, o convite e duas palavras-passe iguais com pelo menos 8 caracteres.',true);return;}
+    setBusy(button,true,'A validar convite…');
+    try{
+      const {data:valid,error:ve}=await db.rpc('validate_store_invitation',{p_email:email,p_code:inviteCode});
+      if(ve)throw ve; if(valid!==true)throw new Error('Convite inválido, expirado ou associado a outro email.');
+      const meta={full_name:String(d.get('full_name')||'').trim(),phone:String(d.get('phone')||'').trim(),store_name:storeName,logo_url:String(d.get('logo_url')||'').trim(),invite_code:inviteCode};
+      const {data:res,error}=await db.auth.signUp({email,password,options:{emailRedirectTo:'https://vani-elegance.onrender.com/',data:meta}});
+      if(error)throw error; form.reset();
+      if(res?.session&&res?.user){
+        currentAdmin=res.user; const f=$('#store-create-form');
+        f.elements.store_name.value=meta.store_name; f.elements.logo_url.value=meta.logo_url;
+        f.elements.phone.value=meta.phone; f.elements.email.value=email; f.elements.invite_code.value=inviteCode;
+        showStoreCreateView(res.user); setMessage($('#store-create-message'),'Conta autenticada. Confirme os dados e carregue em “Criar loja”.');
+      }else{
+        showSignupView(false); const le=$('#admin-login-form input[name="email"]'); if(le)le.value=email;
+        const notice='Conta criada. Confirme o email e depois entre para concluir a criação da loja. Guarde o código de convite até terminar.';
+        setMessage($('#login-message'),notice); showToast(notice,'success',8000);
+      }
+    }catch(error){console.error('Store signup:',error);setMessage(msg,error.message||'Não foi possível criar a conta.',true);}
+    finally{setBusy(button,false);}
+  }
+
+  async function submitCreateInvitation(event) {
+    event.preventDefault(); const form=event.currentTarget; const email=String(form.elements.email.value||'').trim().toLowerCase();
+    const button=$('button[type="submit"]',form); setMessage($('#invite-message'),'');
+    try{setBusy(button,true,'A gerar convite…');const {data,error}=await db.rpc('create_store_invitation',{p_email:email});if(error)throw error;
+      const v=Array.isArray(data)?data[0]:data;if(!v?.code)throw new Error('O servidor não devolveu o código.');
+      setMessage($('#invite-message'),'Convite para '+v.email+'. Código: '+v.code+'. Válido até '+new Date(v.expires_at).toLocaleString()+'. Envie apenas à pessoa autorizada.');
       form.reset();
-      showSignupView(false);
-      const loginEmail = $('#admin-login-form input[name="email"]');
-      if (loginEmail) loginEmail.value = email;
-      const notice = result?.session
-        ? 'Conta de cliente criada. Este registo não concede acesso administrativo.'
-        : 'Registo enviado. Verifique o email para confirmar a conta. O acesso administrativo continua protegido.';
-      setMessage($('#login-message'), notice);
-      showToast(notice, 'success', 7000);
-    } catch (error) {
-      console.error('Customer signup:', error);
-      setMessage(message, error?.message || 'Não foi possível criar a conta. Verifique os dados e tente novamente.', true);
-    } finally {
-      setBusy(button, false);
-    }
+    }catch(error){console.error(error);setMessage($('#invite-message'),error.message||'Não foi possível gerar o convite.',true);}
+    finally{setBusy(button,false);}
   }
 
   async function recoverPassword() {
@@ -457,11 +523,12 @@
   async function logoutAdmin() {
     if (!db) return; const { error } = await db.auth.signOut();
     if (error) { showToast(error.message,'error'); return; }
-    currentAdmin = null; $('#admin-dashboard').hidden = true; $('#admin-login-view').hidden = false; $('#admin-login-form').reset(); $('#admin-logout').hidden = true; setMessage($('#login-message'),''); showToast(t('logout'),'success');
+    currentAdmin = null; $('#admin-dashboard').hidden = true; $('#store-create-view').hidden = true; $('#customer-signup-view').hidden = true; $('#password-recovery-view').hidden = true; $('#admin-login-view').hidden = false; $('#admin-login-form').reset(); $('#admin-logout').hidden = true; setMessage($('#login-message'),''); showToast(t('logout'),'success');
   }
   function showAdminDashboard() {
-    $('#admin-login-view').hidden = true; $('#admin-dashboard').hidden = false; $('#admin-logout').hidden = false;
-    $('#admin-user-label').textContent = currentAdmin?.email || '';
+    $('#admin-login-view').hidden = true; $('#customer-signup-view').hidden = true; $('#password-recovery-view').hidden = true; $('#store-create-view').hidden = true; $('#admin-dashboard').hidden = false; $('#admin-logout').hidden = false;
+    $('#admin-user-label').textContent = `${currentAdmin?.email || ''} · ${storeSettings.store_name || 'Loja'}`;
+    const inviteCard=$('#platform-invite-card'); if(inviteCard) checkPlatformAdmin(currentAdmin?.id).then(isAdmin=>{inviteCard.hidden=!isAdmin;});
     switchAdminTab('overview'); loadAdminDashboard();
   }
   function switchAdminTab(name) {
@@ -476,7 +543,7 @@
   async function adminRequest(task) {
     const { data: sessionData } = await db.auth.getSession();
     if (!sessionData?.session?.user) throw new Error('A sessão expirou. Entre novamente.');
-    if (!(await checkAdminRole(sessionData.session.user.id))) { await db.auth.signOut(); throw new Error(t('notAdmin')); }
+    if (!(await checkAdminRole(sessionData.session.user.id))) throw new Error('Esta conta não tem acesso a esta loja.');
     return task();
   }
   async function loadAdminDashboard() {
@@ -484,9 +551,9 @@
     try {
       await adminRequest(async () => {
         const results = await Promise.all([
-          db.from('products').select('id,active',{count:'exact'}),
-          db.from('orders').select('id,status,created_at,order_number,customer_name,total',{count:'exact'}).order('created_at',{ascending:false}).limit(5),
-          db.from('categories').select('id,active',{count:'exact'}).eq('active',true)
+          db.from('products').select('id,active',{count:'exact'}).eq('store_id',activeStoreId),
+          db.from('orders').select('id,status,created_at,order_number,customer_name,total',{count:'exact'}).eq('store_id',activeStoreId).order('created_at',{ascending:false}).limit(5),
+          db.from('categories').select('id,active',{count:'exact'}).eq('store_id',activeStoreId).eq('active',true)
         ]);
         const [p,o,c] = results;
         if (p.error) throw p.error; if (o.error) throw o.error; if (c.error) throw c.error;
@@ -502,9 +569,9 @@
   async function loadAdminProducts() {
     try {
       await adminRequest(async () => {
-        const { data, error } = await db.from('products').select('*, categories(id,name), product_variants(*)').order('created_at',{ascending:false});
+        const { data, error } = await db.from('products').select('*, categories(id,name), product_variants(*)').eq('store_id',activeStoreId).order('created_at',{ascending:false});
         if (error) throw error; adminProducts = data || [];
-        const { data: cats, error: catError } = await db.from('categories').select('*').order('name'); if (catError) throw catError; adminCategories = cats || [];
+        const { data: cats, error: catError } = await db.from('categories').select('*').eq('store_id',activeStoreId).order('name'); if (catError) throw catError; adminCategories = cats || [];
         fillProductCategorySelect(); renderAdminProducts();
       });
     } catch(error) { console.error(error); $('#admin-products-list').innerHTML = `<div class="empty-state">${escapeHTML(error.message || t('connectionError'))}</div>`; }
@@ -574,6 +641,7 @@
         let imageUrl = form.elements.image_url.value.trim() || null;
         if (file) imageUrl = await uploadProductImage(file);
         const payload = {
+          store_id:activeStoreId,
           name, slug:`${slugify(name)}-${(id || crypto.randomUUID()).slice(0,8)}`,
           category_id:form.elements.category_id.value || null,
           description:form.elements.description.value.trim() || null,
@@ -624,7 +692,7 @@
   }
 
   async function loadAdminCategories() {
-    try { await adminRequest(async () => { const {data,error} = await db.from('categories').select('*').order('sort_order').order('name'); if (error) throw error; adminCategories = data || []; fillProductCategorySelect(); renderAdminCategories(); }); }
+    try { await adminRequest(async () => { const {data,error} = await db.from('categories').select('*').eq('store_id',activeStoreId).order('sort_order').order('name'); if (error) throw error; adminCategories = data || []; fillProductCategorySelect(); renderAdminCategories(); }); }
     catch(error) { console.error(error); $('#admin-categories-list').innerHTML = `<div class="empty-state">${escapeHTML(error.message || t('connectionError'))}</div>`; }
   }
   function renderAdminCategories() {
@@ -638,7 +706,7 @@
     try {
       await adminRequest(async () => {
         const payload = {name,slug:`${slugify(name)}-${(id || crypto.randomUUID()).slice(0,8)}`,updated_at:new Date().toISOString()};
-        const result = id ? await db.from('categories').update(payload).eq('id',id).select('*').single() : await db.from('categories').insert({...payload,active:true}).select('*').single();
+        const result = id ? await db.from('categories').update(payload).eq('id',id).eq('store_id',activeStoreId).select('*').single() : await db.from('categories').insert({...payload,store_id:activeStoreId,active:true}).select('*').single();
         if (result.error) throw result.error; if (!result.data) throw new Error('A base de dados não confirmou a categoria.');
         resetCategoryForm(); showToast(t('categorySaved'),'success'); await Promise.all([loadAdminCategories(),loadPublicData(),loadAdminProducts()]);
       });
@@ -663,7 +731,7 @@
   }
 
   async function fillStoreSettingsForm() {
-    try { await adminRequest(async () => { const {data,error} = await db.from('store_settings').select('*').limit(1).maybeSingle(); if (error) throw error; if (!data) throw new Error('Não existe uma linha em store_settings.'); storeSettings = {...storeSettings,...data}; const form = $('#store-settings-form'); Object.keys(storeSettings).forEach(key => { if (form.elements[key]) form.elements[key].value = storeSettings[key] ?? ''; }); updateStoreIdentity(); }); }
+    try { await adminRequest(async () => { const {data,error} = await db.from('store_settings').select('*').eq('store_id',activeStoreId).limit(1).maybeSingle(); if (error) throw error; if (!data) throw new Error('Não existe uma linha em store_settings.'); storeSettings = {...storeSettings,...data}; const form = $('#store-settings-form'); Object.keys(storeSettings).forEach(key => { if (form.elements[key]) form.elements[key].value = storeSettings[key] ?? ''; }); updateStoreIdentity(); }); }
     catch(error) { console.error(error); setMessage($('#settings-message'),error.message || t('connectionError'),true); }
   }
   async function saveStoreSettings(event) {
@@ -673,7 +741,7 @@
         setBusy(button,true,t('saving'));
         const payload = {store_name:form.elements.store_name.value.trim(),logo_url:form.elements.logo_url.value.trim() || null,whatsapp_number:form.elements.whatsapp_number.value.trim() || null,phone:form.elements.phone.value.trim() || null,email:form.elements.email.value.trim() || null,address:form.elements.address.value.trim() || null,currency:(form.elements.currency.value.trim() || 'MZN').toUpperCase(),currency_label:form.elements.currency_label.value.trim() || 'MT',default_language:form.elements.default_language.value || 'pt',updated_at:new Date().toISOString()};
         if (!storeSettings.id) { const {data,error} = await db.from('store_settings').select('*').limit(1).maybeSingle(); if (error) throw error; if (!data) throw new Error('Não existe uma linha em store_settings.'); storeSettings = {...storeSettings,...data}; }
-        const {data,error} = await db.from('store_settings').update(payload).eq('id',storeSettings.id).select('*').single(); if (error) throw error; if (!data) throw new Error('A base de dados não confirmou as definições.');
+        const {data,error} = await db.from('store_settings').update(payload).eq('id',storeSettings.id).eq('store_id',activeStoreId).select('*').single(); if (error) throw error; if (!data) throw new Error('A base de dados não confirmou as definições.');
         storeSettings = {...storeSettings,...data}; if (!localStorage.getItem(LANGUAGE_KEY)) language = storeSettings.default_language || language;
         applyTranslations(); setMessage($('#settings-message'),t('settingsSaved')); showToast(t('settingsSaved'),'success');
       });
@@ -683,7 +751,7 @@
 
   async function loadAdminPayments() {
     try {
-      await adminRequest(async () => { const {data,error} = await db.from('payment_settings').select('*').order('sort_order').order('method_name'); if (error) throw error; paymentSettings = data || []; renderAdminPayments(); renderCheckoutPayments(); updateStoreIdentity(); });
+      await adminRequest(async () => { const {data,error} = await db.from('payment_settings').select('*').eq('store_id',activeStoreId).order('sort_order').order('method_name'); if (error) throw error; paymentSettings = data || []; renderAdminPayments(); renderCheckoutPayments(); updateStoreIdentity(); });
     } catch(error) { console.error(error); $('#payment-settings-list').innerHTML = `<div class="empty-state">${escapeHTML(error.message || t('connectionError'))}</div>`; }
   }
   function renderAdminPayments() {
@@ -699,10 +767,10 @@
         for (const card of cards) {
           const code = card.dataset.paymentCode;
           const payload = {account_name:$('input[name="account_name"]',card).value.trim() || null,account_number:$('input[name="account_number"]',card).value.trim() || null,bank_name:$('input[name="bank_name"]',card).value.trim() || null,instructions:$('textarea[name="instructions"]',card).value.trim() || null,active:$('input[name="active"]',card).checked,updated_at:new Date().toISOString()};
-          const {data,error} = await db.from('payment_settings').update(payload).eq('method_code',code).select('id,method_code').single();
+          const {data,error} = await db.from('payment_settings').update(payload).eq('method_code',code).eq('store_id',activeStoreId).select('id,method_code').single();
           if (error) throw new Error(`${METHOD_NAMES[code] || code}: ${error.message}`); if (!data) throw new Error(`A base de dados não confirmou ${code}.`);
         }
-        const {data,error} = await db.from('payment_settings').select('*').order('sort_order'); if (error) throw error; paymentSettings = data || [];
+        const {data,error} = await db.from('payment_settings').select('*').eq('store_id',activeStoreId).order('sort_order'); if (error) throw error; paymentSettings = data || [];
         renderCheckoutPayments(); updateStoreIdentity(); setMessage($('#payments-message'),t('paymentsSaved')); showToast(t('paymentsSaved'),'success');
       });
     } catch(error) { console.error(error); setMessage($('#payments-message'),`${error.message || t('connectionError')} Se alguns métodos anteriores já foram guardados, reveja-os antes de sair.`,true); showToast(error.message || t('connectionError'),'error',6000); }
@@ -711,7 +779,7 @@
 
   async function loadAdminOrders() {
     if (!db) return;
-    try { await adminRequest(async () => { const {data,error} = await db.from('orders').select('*, order_items(*)').order('created_at',{ascending:false}).limit(200); if (error) throw error; adminOrders = data || []; renderAdminOrders(); loadAdminDashboard(); }); }
+    try { await adminRequest(async () => { const {data,error} = await db.from('orders').select('*, order_items(*)').eq('store_id',activeStoreId).order('created_at',{ascending:false}).limit(200); if (error) throw error; adminOrders = data || []; renderAdminOrders(); loadAdminDashboard(); }); }
     catch(error) { console.error(error); $('#admin-orders-list').innerHTML = `<div class="empty-state">${escapeHTML(error.message || t('connectionError'))}</div>`; }
   }
   function renderAdminOrders() {
