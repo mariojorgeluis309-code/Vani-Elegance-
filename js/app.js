@@ -126,6 +126,7 @@
     $('#open-admin')?.addEventListener('click', openAdminArea);
     $('#admin-login-form')?.addEventListener('submit', submitLogin);
     $('#open-customer-signup')?.addEventListener('click', () => showSignupView(true));
+    $('#open-customer-signup-public')?.addEventListener('click', async () => { await openAdminArea(); showSignupView(true); });
     $('#back-to-login')?.addEventListener('click', () => showSignupView(false));
     $('#customer-signup-form')?.addEventListener('submit', submitCustomerSignup);
     $('#forgot-password')?.addEventListener('click', recoverPassword);
