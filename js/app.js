@@ -159,7 +159,7 @@
 
   async function resolveActiveStore() {
     if (!db) return;
-    const requested = new URLSearchParams(location.search).get('loja') || localStorage.getItem('vani_active_store_slug') || 'vani-elegance';
+    const requested = new URLSearchParams(location.search).get('loja') || 'vani-elegance';
     const { data, error } = await db.from('stores').select('id,name,slug,status').eq('slug',requested).eq('status','active').maybeSingle();
     if (error) console.error('resolve store:',error);
     if (data) setActiveStore(data);
