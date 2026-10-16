@@ -608,7 +608,7 @@
     if (!file.type.startsWith('image/')) throw new Error('O ficheiro selecionado não é uma imagem.');
     if (file.size > 8 * 1024 * 1024) throw new Error('A imagem deve ter no máximo 8 MB.');
     const clean = file.name.normalize('NFD').replace(/[\u0300-\u036f]/g,'').replace(/[^a-zA-Z0-9._-]+/g,'-').slice(-100) || 'imagem';
-    const path = `products/${Date.now()}-${crypto.randomUUID().slice(0,8)}-${clean}`;
+    const path = `stores/${activeStoreId}/products/${Date.now()}-${crypto.randomUUID().slice(0,8)}-${clean}`;
     const { error } = await db.storage.from(STORAGE_BUCKET).upload(path,file,{upsert:false,contentType:file.type,cacheControl:'3600'});
     if (error) throw error;
     const { data } = db.storage.from(STORAGE_BUCKET).getPublicUrl(path);
@@ -740,7 +740,7 @@
       await adminRequest(async () => {
         setBusy(button,true,t('saving'));
         const payload = {store_name:form.elements.store_name.value.trim(),logo_url:form.elements.logo_url.value.trim() || null,whatsapp_number:form.elements.whatsapp_number.value.trim() || null,phone:form.elements.phone.value.trim() || null,email:form.elements.email.value.trim() || null,address:form.elements.address.value.trim() || null,currency:(form.elements.currency.value.trim() || 'MZN').toUpperCase(),currency_label:form.elements.currency_label.value.trim() || 'MT',default_language:form.elements.default_language.value || 'pt',updated_at:new Date().toISOString()};
-        if (!storeSettings.id) { const {data,error} = await db.from('store_settings').select('*').limit(1).maybeSingle(); if (error) throw error; if (!data) throw new Error('Não existe uma linha em store_settings.'); storeSettings = {...storeSettings,...data}; }
+        if (!storeSettings.id) { const {data,error} = await db.from('store_settings').select('*').eq('store_id',activeStoreId).limit(1).maybeSingle(); if (error) throw error; if (!data) throw new Error('Não existe uma linha em store_settings.'); storeSettings = {...storeSettings,...data}; }
         const {data,error} = await db.from('store_settings').update(payload).eq('id',storeSettings.id).eq('store_id',activeStoreId).select('*').single(); if (error) throw error; if (!data) throw new Error('A base de dados não confirmou as definições.');
         storeSettings = {...storeSettings,...data}; if (!localStorage.getItem(LANGUAGE_KEY)) language = storeSettings.default_language || language;
         applyTranslations(); setMessage($('#settings-message'),t('settingsSaved')); showToast(t('settingsSaved'),'success');
