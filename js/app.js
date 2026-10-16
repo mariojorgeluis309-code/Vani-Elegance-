@@ -129,7 +129,17 @@
     $('#open-admin')?.addEventListener('click', openAdminArea);
     $('#admin-login-form')?.addEventListener('submit', submitLogin);
     $('#open-customer-signup')?.addEventListener('click', () => showSignupView(true));
-    $('#open-customer-signup-public')?.addEventListener('click', async () => { await openAdminArea(); showSignupView(true); });
+    $('#open-customer-signup-public')?.addEventListener('click', async () => {
+      await openAdminArea();
+      const {data:sessionData}=await db.auth.getSession();
+      if(sessionData?.session?.user){
+        const user=sessionData.session.user; currentAdmin=user;
+        if(await checkAdminRole(user.id)){showAdminDashboard();return;}
+        if(await findUserStore(user.id)){showAdminDashboard();return;}
+        showStoreCreateView(user);return;
+      }
+      showSignupView(true);
+    });
     $('#back-to-login')?.addEventListener('click', () => showSignupView(false));
     $('#customer-signup-form')?.addEventListener('submit', submitCustomerSignup);
     $('#store-create-form')?.addEventListener('submit', createStoreFromForm);
