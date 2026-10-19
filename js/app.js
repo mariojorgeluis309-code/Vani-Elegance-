@@ -397,6 +397,8 @@
   }
   async function checkAdminRole(userId) {
     if (!userId || !activeStoreId) return false;
+    // A administradora geral pode gerir qualquer loja; a restante equipa fica limitada às suas associações.
+    if (await checkPlatformAdmin(userId)) return true;
     const {data,error}=await db.from('store_memberships').select('store_id,role').eq('user_id',userId).eq('store_id',activeStoreId).maybeSingle();
     if(error){console.error('store membership:',error);return false;}
     return !!data && ['owner','manager','editor'].includes(data.role);
