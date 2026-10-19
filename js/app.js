@@ -99,6 +99,13 @@
       return;
     }
     db = window.supabase.createClient(SUPABASE_URL, SUPABASE_PUBLISHABLE_KEY, { auth: { persistSession: true, autoRefreshToken: true, detectSessionInUrl: true } });
+    // Keep old cached HTML compatible while the updated static files propagate.
+    ['#customer-signup-form [name="invite_code"]','#store-create-form [name="invite_code"]'].forEach(selector=>{const field=$(selector);if(field){field.required=false;field.closest('label')?.remove();}});
+    const signupEyebrow=$('#customer-signup-view .eyebrow'); if(signupEyebrow)signupEyebrow.textContent='CRIE A SUA LOJA';
+    const signupIntro=$('#customer-signup-view .login-form > p:not(.eyebrow):not(.form-message)'); if(signupIntro)signupIntro.textContent='Qualquer pessoa pode criar a sua própria loja online.';
+    const signupButton=$('#customer-signup-form button[type="submit"]'); if(signupButton)signupButton.textContent='Criar conta e loja';
+    const loginSignup=$('#open-customer-signup'); if(loginSignup)loginSignup.textContent='Criar a minha loja';
+    const storeIntro=$('#store-create-view .login-form > p:not(.eyebrow):not(.form-message)'); if(storeIntro)storeIntro.textContent='Configure os dados básicos da sua loja para começar.';
     $('#language-select').value = language;
     applyTranslations();
     bindEvents();
@@ -204,23 +211,21 @@
       if(!form.elements.logo_url.value)form.elements.logo_url.value=m.logo_url||'';
       if(!form.elements.phone.value)form.elements.phone.value=m.phone||'';
       if(!form.elements.email.value)form.elements.email.value=user.email||'';
-      if(!form.elements.invite_code.value)form.elements.invite_code.value=m.invite_code||'';
     }
   }
   async function createStoreFromForm(event) {
     event.preventDefault(); const form=event.currentTarget; const d=new FormData(form); const button=$('button[type="submit"]',form);
     setMessage($('#store-create-message'),''); setBusy(button,true,'A criar loja…');
     try {
-      const {data,error}=await db.rpc('create_store_from_invitation',{
+      const {data,error}=await db.rpc('create_store',{
         p_name:String(d.get('store_name')||'').trim(),p_logo_url:String(d.get('logo_url')||'').trim()||null,
-        p_phone:String(d.get('phone')||'').trim()||null,p_email:String(d.get('email')||'').trim()||null,
-        p_invite_code:String(d.get('invite_code')||'').trim().toUpperCase()
+        p_phone:String(d.get('phone')||'').trim()||null,p_email:String(d.get('email')||'').trim()||null
       });
       if(error)throw error; const store=Array.isArray(data)?data[0]:data;
       if(!store?.id||!store?.slug)throw new Error('A base de dados não confirmou a criação da loja.');
       setActiveStore(store); await loadPublicData(); form.reset(); showAdminDashboard();
       showToast('Loja criada com sucesso. Já pode cadastrar os seus produtos.','success',7000);
-    } catch(error){console.error('create store:',error);setMessage($('#store-create-message'),error.message||'Não foi possível criar a loja. Confirme o convite.',true);}
+    } catch(error){console.error('create store:',error);setMessage($('#store-create-message'),error.message||'Não foi possível criar a loja.',true);}
     finally{setBusy(button,false);}
   }
 
@@ -436,25 +441,22 @@
     const form=event.currentTarget, d=new FormData(form);
     const email=String(d.get('email')||'').trim().toLowerCase();
     const password=String(d.get('password')||''), confirmation=String(d.get('confirm_password')||'');
-    const inviteCode=String(d.get('invite_code')||'').trim().toUpperCase();
     const storeName=String(d.get('store_name')||'').trim();
     const msg=$('#signup-message'), button=$('button[type="submit"]',form); setMessage(msg,'');
-    if(!storeName||!inviteCode||password.length<8||password!==confirmation){setMessage(msg,'Preencha o nome da loja, o convite e duas palavras-passe iguais com pelo menos 8 caracteres.',true);return;}
-    setBusy(button,true,'A validar convite…');
+    if(!storeName||password.length<8||password!==confirmation){setMessage(msg,'Indique o nome da loja e duas palavras-passe iguais com pelo menos 8 caracteres.',true);return;}
+    setBusy(button,true,'A criar conta…');
     try{
-      const {data:valid,error:ve}=await db.rpc('validate_store_invitation',{p_email:email,p_code:inviteCode});
-      if(ve)throw ve; if(valid!==true)throw new Error('Convite inválido, expirado ou associado a outro email.');
-      const meta={full_name:String(d.get('full_name')||'').trim(),phone:String(d.get('phone')||'').trim(),store_name:storeName,logo_url:String(d.get('logo_url')||'').trim(),invite_code:inviteCode};
+      const meta={full_name:String(d.get('full_name')||'').trim(),phone:String(d.get('phone')||'').trim(),store_name:storeName,logo_url:String(d.get('logo_url')||'').trim()};
       const {data:res,error}=await db.auth.signUp({email,password,options:{emailRedirectTo:'https://vani-elegance.onrender.com/',data:meta}});
       if(error)throw error; form.reset();
       if(res?.session&&res?.user){
         currentAdmin=res.user; const f=$('#store-create-form');
         f.elements.store_name.value=meta.store_name; f.elements.logo_url.value=meta.logo_url;
-        f.elements.phone.value=meta.phone; f.elements.email.value=email; f.elements.invite_code.value=inviteCode;
+        f.elements.phone.value=meta.phone; f.elements.email.value=email;
         showStoreCreateView(res.user); setMessage($('#store-create-message'),'Conta autenticada. Confirme os dados e carregue em “Criar loja”.');
       }else{
         showSignupView(false); const le=$('#admin-login-form input[name="email"]'); if(le)le.value=email;
-        const notice='Conta criada. Confirme o email e depois entre para concluir a criação da loja. Guarde o código de convite até terminar.';
+        const notice='Conta criada. Se receber um email de confirmação, confirme-o e depois entre para concluir a criação da loja.';
         setMessage($('#login-message'),notice); showToast(notice,'success',8000);
       }
     }catch(error){console.error('Store signup:',error);setMessage(msg,error.message||'Não foi possível criar a conta.',true);}
