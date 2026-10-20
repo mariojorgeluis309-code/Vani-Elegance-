@@ -236,7 +236,7 @@
     const results = await Promise.allSettled([
       db.from('store_settings').select('*').eq('store_id', activeStoreId).limit(1).maybeSingle(),
       db.from('categories').select('*').eq('store_id', activeStoreId).eq('active', true).order('sort_order').order('name'),
-      db.from('products').select('*, categories(id,name,slug,active), product_variants(*)').eq('store_id', activeStoreId).eq('active', true).order('featured', { ascending: false }).order('created_at', { ascending: false }),
+      db.from('products').select('*, categories!products_category_id_fkey(id,name,slug,active), product_variants(*)').eq('store_id', activeStoreId).eq('active', true).order('featured', { ascending: false }).order('created_at', { ascending: false }),
       db.from('payment_settings').select('*').eq('store_id', activeStoreId).eq('active', true).order('sort_order').order('method_name')
     ]);
     const [settingsResult, categoriesResult, productsResult, paymentsResult] = results.map(r => r.status === 'fulfilled' ? r.value : { error: r.reason });
