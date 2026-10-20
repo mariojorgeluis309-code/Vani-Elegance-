@@ -242,7 +242,7 @@
     const [settingsResult, categoriesResult, productsResult, paymentsResult] = results.map(r => r.status === 'fulfilled' ? r.value : { error: r.reason });
     if (settingsResult.error) console.error('store_settings:', settingsResult.error); else if (settingsResult.data) storeSettings = { ...storeSettings, ...settingsResult.data };
     if (categoriesResult.error) { console.error('categories query failed:', categoriesResult.error.code, categoriesResult.error.message, categoriesResult.error.details); catalogLoadError = true; } else categories = categoriesResult.data || [];
-    if (productsResult.error) { console.error('products:', productsResult.error); catalogLoadError = true; } else products = productsResult.data || [];
+    if (productsResult.error) { console.error('products query failed:', productsResult.error.code, productsResult.error.message, productsResult.error.details); catalogLoadError = true; } else products = productsResult.data || [];
     if (paymentsResult.error) console.error('payment_settings:', paymentsResult.error); else paymentSettings = paymentsResult.data || [];
     if (!localStorage.getItem(LANGUAGE_KEY) && ['pt','en','fr','es'].includes(storeSettings.default_language)) language = storeSettings.default_language;
     $('#language-select').value = language;
